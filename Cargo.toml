@@ -1,0 +1,11 @@
+[package]
+name = "els"
+version = "0.1.0"
+edition = "2024"
+description = "CLI for the ECC Core API"
+
+[dependencies]
+clap = { version = "4.6.6", features = ["derive"] }
+reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "json", "rustls", "charset", "query"] }
+rpassword = "7.5.4"
+serde_json = "1.0.151"
