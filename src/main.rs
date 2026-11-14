@@ -1,19 +1,35 @@
 mod client;
 
 use std::io::{self, IsTerminal, Read, Write};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use serde_json::{Value, json};
 
 use client::{
-    Client, REFRESH_ITEM, TOKEN_ITEM, base_url, find_tokens, secret_delete, secret_get,
-    secret_set, stored_token,
+    Client, REFRESH_ITEM, TOKEN_ITEM, base_url, config_dir, find_tokens, secret_delete,
+    secret_get, secret_set, stored_token,
 };
 
-/// Every endpoint in the API reference, one per line: module, method, path, summary.
-/// Regenerate with tools/ when a new PDF comes out.
-const CATALOG: &str = include_str!("catalog.tsv");
+/// The endpoint list is internal, so it is not in the repository. Each developer
+/// builds it from the API reference PDF in the Portal, with the scripts in tools/.
+fn load_catalog() -> Result<String, String> {
+    let path = match std::env::var("ELS_CATALOG") {
+        Ok(path) if !path.is_empty() => PathBuf::from(path),
+        _ => config_dir()?.join("catalog.tsv"),
+    };
+    match std::fs::read_to_string(&path) {
+        Ok(text) => Ok(text),
+        Err(_) => Err(format!(
+            "no endpoint list at {0}\n\
+             Build it once from the API reference PDF in the Portal:\n  \
+             python3 tools/pdftext.py <reference.pdf> ecc.txt\n  \
+             python3 tools/mkcat.py ecc.txt \"{0}\"",
+            path.display()
+        )),
+    }
+}
 
 #[derive(Parser)]
 #[command(
@@ -440,7 +456,8 @@ fn print_event_table(answer: &Value) {
 }
 
 fn modules(module: Option<String>, search: Option<String>) -> Result<(), String> {
-    let rows: Vec<[&str; 4]> = CATALOG
+    let catalog = load_catalog()?;
+    let rows: Vec<[&str; 4]> = catalog
         .lines()
         .filter_map(|line| {
             let mut parts = line.splitn(4, '\t');
@@ -613,11 +630,5 @@ mod tests {
         let tokens = json!({ "data": { "tokens": { "accessToken": "a" } } });
         assert_eq!(find_tokens(&tokens), Some(("a".into(), None)));
         assert_eq!(find_tokens(&json!({ "data": {} })), None);
-    }
-
-    #[test]
-    fn catalog_has_every_event_endpoint() {
-        let events = CATALOG.lines().filter(|l| l.starts_with("/admin/event\t")).count();
-        assert_eq!(events, 38);
     }
 }

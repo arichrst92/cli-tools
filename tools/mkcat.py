@@ -1,3 +1,4 @@
+# Usage: python3 tools/mkcat.py <out of pdftext.py> <catalog.tsv>
 import re,sys
 def fix(t):
     try: return t.encode('latin-1').decode('utf-8')
@@ -28,6 +29,6 @@ for i,l in enumerate(L):
     k=(meth,p)
     if k not in out or (not out[k][1] and summ): out[k]=(cur,summ[:110])
 rows=sorted(out.items(),key=lambda x:(x[1][0],x[0][1],x[0][0]))
-with open(sys.argv[2],'w') as f:
+with open(sys.argv[2],'w',encoding='utf-8') as f:
     for (meth,p),(mod,s) in rows: f.write(f"{mod}\t{meth}\t{p}\t{s.replace(chr(9),' ')}\n")
 print(len(rows),'endpoints',len(mods),'modules')

@@ -30,7 +30,7 @@ pub fn secret_get(item: &str) -> Option<String> {
     if ON_MAC {
         keychain_get(item)
     } else {
-        file_get(&secret_dir().ok()?, item)
+        file_get(&config_dir().ok()?, item)
     }
 }
 
@@ -47,21 +47,21 @@ pub fn secret_set(item: &str, secret: &str) -> Result<(), String> {
     if ON_MAC {
         keychain_set(item, secret)
     } else {
-        file_set(&secret_dir()?, item, secret)
+        file_set(&config_dir()?, item, secret)
     }
 }
 
 pub fn secret_delete(item: &str) {
     if ON_MAC {
         keychain_delete(item);
-    } else if let Ok(dir) = secret_dir() {
+    } else if let Ok(dir) = config_dir() {
         let _ = std::fs::remove_file(dir.join(item));
     }
 }
 
 /// Where a token is kept, for `els auth status`.
 pub fn secret_place(item: &str) -> String {
-    match secret_dir() {
+    match config_dir() {
         _ if ON_MAC => format!("macOS Keychain item \"{item}\""),
         Ok(dir) => dir.join(item).display().to_string(),
         Err(e) => e,
@@ -69,7 +69,7 @@ pub fn secret_place(item: &str) -> String {
 }
 
 /// Windows: %APPDATA%\els. Elsewhere: $XDG_CONFIG_HOME/els or ~/.config/els.
-pub fn secret_dir() -> Result<PathBuf, String> {
+pub fn config_dir() -> Result<PathBuf, String> {
     let var = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
     if cfg!(windows) {
         let appdata = var("APPDATA").ok_or("APPDATA is not set")?;

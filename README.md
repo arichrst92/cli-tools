@@ -12,7 +12,7 @@ For ECC developers only. Please do not share this repository outside the team.</
 ## What it does
 
 - **Log in** with a personal access token or a WhatsApp code.
-- **Browse the API offline.** `els modules` lists all 93 modules and 763 endpoints.
+- **Browse the API offline.** `els modules` lists every module and endpoint, once you've built the list (see [Endpoint list](#endpoint-list)).
 - **Manage events** with ready-made commands.
 - **Call any other endpoint** with `els call`.
 
@@ -43,8 +43,8 @@ You need **Rust** and a C compiler (one of the libraries builds a small C part).
 Then, in a terminal (Terminal on macOS/Linux, PowerShell on Windows):
 
 ```bash
-git clone https://github.com/kekvin1868/els-app.git
-cd els-app
+git clone https://github.com/arichrst92/cli-tools.git
+cd cli-tools
 cargo install --path .
 els --help
 ```
@@ -106,6 +106,8 @@ It only lasts until you close that terminal. In CI, store the token as a secret 
 
 ### Explore the API
 
+Needs the endpoint list first, see [Endpoint list](#endpoint-list).
+
 ```bash
 els modules                 # every module, with how many endpoints it has
 els modules event           # every endpoint in one module
@@ -154,18 +156,29 @@ Fill in the `:params` from `els modules` with real ids.
 |-------------|----------------------------------------------------------|
 | `ELS_TOKEN` | Use this token instead of the stored one                 |
 | `ELS_URL`   | Point `els` at another server, for example a test server |
+| `ELS_CATALOG` | Read the endpoint list from this file instead of the default location |
 
-## Updating the endpoint list
+## Endpoint list
 
-`src/catalog.tsv` is generated from the API reference PDF in the Portal. When a new one comes out:
+The full endpoint list is internal, so it is **not in this repository**. Build it once on your own machine from the API reference PDF, which you get from the Portal. You need Python 3; nothing else to install.
 
+**macOS / Linux**
 ```bash
-python3 tools/pdftext.py ecc-api-reference.pdf > ecc.txt
-python3 tools/mkcat.py ecc.txt src/catalog.tsv
-cargo test
+mkdir -p ~/.config/els
+python3 tools/pdftext.py ecc-api-reference.pdf ecc.txt
+python3 tools/mkcat.py ecc.txt ~/.config/els/catalog.tsv
+rm ecc.txt
 ```
 
-Don't commit the PDF; `.gitignore` already skips it.
+**Windows (PowerShell)**
+```powershell
+New-Item -ItemType Directory -Force "$env:APPDATA\els" | Out-Null
+python tools/pdftext.py ecc-api-reference.pdf ecc.txt
+python tools/mkcat.py ecc.txt "$env:APPDATA\els\catalog.tsv"
+Remove-Item ecc.txt
+```
+
+Run it again when a new PDF comes out. Never commit the PDF, `ecc.txt` or `catalog.tsv`; `.gitignore` already skips them.
 
 ## Known gaps
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Usage: python3 tools/pdftext.py <reference.pdf> <out.txt>
 # ponytail: stdlib-only PDF text extract (no pypdf/pip). Handles FlateDecode + Tj/TJ.
 import sys, re, zlib
 
@@ -34,4 +35,9 @@ for m in re.finditer(rb"stream\r?\n(.*?)\r?\nendstream", data, re.DOTALL):
             out.append("\n")
         else:
             out.append(" ")
-print("".join(out))
+text = "".join(out)
+if len(sys.argv) > 2:
+    # Written as latin-1 to match how mkcat.py reads it, whatever the shell's encoding.
+    open(sys.argv[2], "w", encoding="latin-1").write(text)
+else:
+    print(text)
