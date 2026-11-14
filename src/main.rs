@@ -7,8 +7,8 @@ use clap::{Parser, Subcommand, ValueEnum};
 use serde_json::{Value, json};
 
 use client::{
-    Client, REFRESH_ITEM, TOKEN_ITEM, base_url, find_tokens, keychain_delete, keychain_get,
-    keychain_set, stored_token,
+    Client, REFRESH_ITEM, TOKEN_ITEM, base_url, find_tokens, secret_delete, secret_get,
+    secret_set, stored_token,
 };
 
 /// Every endpoint in the API reference, one per line: module, method, path, summary.
@@ -66,7 +66,7 @@ enum Command {
 
 #[derive(Subcommand)]
 enum AuthCommand {
-    /// Log in and keep the token in the macOS Keychain
+    /// Log in and keep the token on this computer (macOS Keychain, or a private file)
     Login {
         /// Skip the menu and log in this way
         #[arg(long, value_enum)]
@@ -81,7 +81,7 @@ enum AuthCommand {
     Whoami,
     /// Show which Portal menus your role can read, write and delete
     Access,
-    /// Remove the token from the Keychain
+    /// Remove the token from this computer
     Logout {
         /// After a WhatsApp login, also end your sessions on every other device
         #[arg(long)]
@@ -214,7 +214,7 @@ fn auth(command: AuthCommand, as_json: bool) -> Result<(), String> {
                 Some((token, source)) => {
                     let kind = if token.starts_with("ecc_pat_") {
                         "personal API token"
-                    } else if keychain_get(REFRESH_ITEM).is_some() {
+                    } else if secret_get(REFRESH_ITEM).is_some() {
                         "WhatsApp login (refreshes itself)"
                     } else {
                         "bearer token"
@@ -249,17 +249,17 @@ fn auth(command: AuthCommand, as_json: bool) -> Result<(), String> {
             Ok(())
         }
         AuthCommand::Logout { all } => {
-            if let Some(refresh) = keychain_get(REFRESH_ITEM) {
+            if let Some(refresh) = secret_get(REFRESH_ITEM) {
                 let path = if all { "/auth/logout?all=true" } else { "/auth/logout" };
                 // Best effort: the local copy goes either way.
                 if let Ok(mut client) = Client::logged_in() {
                     let _ = client.post(path, json!({ "refreshToken": refresh }));
                 }
             }
-            let was_token = keychain_get(TOKEN_ITEM).is_some_and(|t| t.starts_with("ecc_pat_"));
-            keychain_delete(TOKEN_ITEM);
-            keychain_delete(REFRESH_ITEM);
-            println!("Logged out: removed the token from the Keychain.");
+            let was_token = secret_get(TOKEN_ITEM).is_some_and(|t| t.starts_with("ecc_pat_"));
+            secret_delete(TOKEN_ITEM);
+            secret_delete(REFRESH_ITEM);
+            println!("Logged out: removed the token from this computer.");
             if was_token {
                 println!(
                     "The personal token itself still works until it expires. To kill it, revoke it in Portal -> Developer Tools -> API Access."
@@ -293,8 +293,8 @@ fn login_token() -> Result<(), String> {
     if !token.starts_with("ecc_pat_") {
         eprintln!("warning: personal tokens start with ecc_pat_, this one does not");
     }
-    keychain_set(TOKEN_ITEM, &token)?;
-    keychain_delete(REFRESH_ITEM);
+    secret_set(TOKEN_ITEM, &token)?;
+    secret_delete(REFRESH_ITEM);
     Ok(())
 }
 
@@ -317,10 +317,10 @@ fn login_whatsapp(phone: Option<String>) -> Result<(), String> {
     )?;
     let (access, refresh) = find_tokens(&answer)
         .ok_or("the login answered without a token; rerun with --json on a call to see the raw answer")?;
-    keychain_set(TOKEN_ITEM, &access)?;
+    secret_set(TOKEN_ITEM, &access)?;
     match refresh {
-        Some(refresh) => keychain_set(REFRESH_ITEM, &refresh)?,
-        None => keychain_delete(REFRESH_ITEM),
+        Some(refresh) => secret_set(REFRESH_ITEM, &refresh)?,
+        None => secret_delete(REFRESH_ITEM),
     }
     Ok(())
 }

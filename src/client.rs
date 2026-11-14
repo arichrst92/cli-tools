@@ -1,4 +1,5 @@
 use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use serde_json::{Value, json};
@@ -19,9 +20,110 @@ pub fn base_url() -> String {
         .to_string()
 }
 
-// ponytail: macOS Keychain through the `security` tool, no keyring crate.
-// On another OS set ELS_TOKEN instead; add a keyring crate if that is needed often.
-pub fn keychain_get(item: &str) -> Option<String> {
+// Where tokens live: the macOS Keychain, or a file only you can read elsewhere.
+// ponytail: plain file outside macOS, the same fallback `gh` uses without a keyring.
+// Owner-only (0600) on Linux; Windows relies on the per-user AppData folder.
+// Move to the keyring crate (Credential Manager, Secret Service) if that is not enough.
+const ON_MAC: bool = cfg!(target_os = "macos");
+
+pub fn secret_get(item: &str) -> Option<String> {
+    if ON_MAC {
+        keychain_get(item)
+    } else {
+        file_get(&secret_dir().ok()?, item)
+    }
+}
+
+pub fn secret_set(item: &str, secret: &str) -> Result<(), String> {
+    // Tokens and JWTs only use these characters. Anything else would break the
+    // Keychain quoting, and usually means the paste picked up something extra.
+    if secret.is_empty()
+        || !secret
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
+    {
+        return Err("the token has unexpected characters; paste only the token itself".into());
+    }
+    if ON_MAC {
+        keychain_set(item, secret)
+    } else {
+        file_set(&secret_dir()?, item, secret)
+    }
+}
+
+pub fn secret_delete(item: &str) {
+    if ON_MAC {
+        keychain_delete(item);
+    } else if let Ok(dir) = secret_dir() {
+        let _ = std::fs::remove_file(dir.join(item));
+    }
+}
+
+/// Where a token is kept, for `els auth status`.
+pub fn secret_place(item: &str) -> String {
+    match secret_dir() {
+        _ if ON_MAC => format!("macOS Keychain item \"{item}\""),
+        Ok(dir) => dir.join(item).display().to_string(),
+        Err(e) => e,
+    }
+}
+
+/// Windows: %APPDATA%\els. Elsewhere: $XDG_CONFIG_HOME/els or ~/.config/els.
+pub fn secret_dir() -> Result<PathBuf, String> {
+    let var = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
+    if cfg!(windows) {
+        let appdata = var("APPDATA").ok_or("APPDATA is not set")?;
+        return Ok(PathBuf::from(appdata).join("els"));
+    }
+    let base = match var("XDG_CONFIG_HOME") {
+        Some(dir) => PathBuf::from(dir),
+        None => PathBuf::from(var("HOME").ok_or("HOME is not set")?).join(".config"),
+    };
+    Ok(base.join("els"))
+}
+
+fn file_get(dir: &Path, item: &str) -> Option<String> {
+    let secret = std::fs::read_to_string(dir.join(item)).ok()?.trim().to_string();
+    (!secret.is_empty()).then_some(secret)
+}
+
+fn file_set(dir: &Path, item: &str, secret: &str) -> Result<(), String> {
+    let path = dir.join(item);
+    let failed = |e: std::io::Error| format!("could not save {}: {e}", path.display());
+
+    #[cfg(unix)]
+    {
+        use std::fs::{DirBuilder, OpenOptions, Permissions, set_permissions};
+        use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+
+        DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir)
+            .map_err(failed)?;
+        // Created owner-only, so the token is never readable by others, even briefly.
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&path)
+            .map_err(failed)?;
+        // Tighten a file an older version or the user left looser.
+        set_permissions(&path, Permissions::from_mode(0o600)).map_err(failed)?;
+        file.write_all(secret.as_bytes()).map_err(failed)?;
+    }
+
+    #[cfg(not(unix))]
+    {
+        std::fs::create_dir_all(dir).map_err(failed)?;
+        std::fs::write(&path, secret).map_err(failed)?;
+    }
+
+    Ok(())
+}
+
+fn keychain_get(item: &str) -> Option<String> {
     let out = Command::new("security")
         .args(["find-generic-password", "-s", item, "-w"])
         .stderr(Stdio::null())
@@ -34,16 +136,7 @@ pub fn keychain_get(item: &str) -> Option<String> {
     (!secret.is_empty()).then_some(secret)
 }
 
-pub fn keychain_set(item: &str, secret: &str) -> Result<(), String> {
-    // Tokens and JWTs only use these characters. Anything else would break the
-    // quoting below, and usually means the paste picked up something extra.
-    if secret.is_empty()
-        || !secret
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
-    {
-        return Err("the token has unexpected characters; paste only the token itself".into());
-    }
+fn keychain_set(item: &str, secret: &str) -> Result<(), String> {
     let account = std::env::var("USER").unwrap_or_else(|_| "els".into());
     // Sent through stdin of `security -i`, so the secret never shows in the process list.
     let mut child = Command::new("security")
@@ -67,7 +160,7 @@ pub fn keychain_set(item: &str, secret: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub fn keychain_delete(item: &str) {
+fn keychain_delete(item: &str) {
     // Loop in case an older login left a second item under the same name.
     for _ in 0..5 {
         let gone = Command::new("security")
@@ -83,14 +176,14 @@ pub fn keychain_delete(item: &str) {
     }
 }
 
-/// ELS_TOKEN wins, so scripts and other machines can skip the Keychain.
-pub fn stored_token() -> Option<(String, &'static str)> {
+/// ELS_TOKEN wins, so scripts and CI can skip the stored token.
+pub fn stored_token() -> Option<(String, String)> {
     if let Ok(token) = std::env::var("ELS_TOKEN")
         && !token.is_empty()
     {
-        return Some((token, "ELS_TOKEN environment variable"));
+        return Some((token, "ELS_TOKEN environment variable".into()));
     }
-    keychain_get(TOKEN_ITEM).map(|token| (token, "macOS Keychain item \"ecc-pat\""))
+    secret_get(TOKEN_ITEM).map(|token| (token, secret_place(TOKEN_ITEM)))
 }
 
 /// Pull the token pair out of a login or refresh answer.
@@ -195,7 +288,7 @@ impl Client {
     }
 
     fn refresh(&mut self) -> Result<(), String> {
-        let refresh = keychain_get(REFRESH_ITEM).ok_or("no refresh token")?;
+        let refresh = secret_get(REFRESH_ITEM).ok_or("no refresh token")?;
         let (status, answer) = self.raw(
             "POST",
             "/auth/refresh",
@@ -204,10 +297,10 @@ impl Client {
         )?;
         let answer = check(status, answer)?;
         let (access, new_refresh) = find_tokens(&answer).ok_or("refresh gave no token")?;
-        keychain_set(TOKEN_ITEM, &access)?;
+        secret_set(TOKEN_ITEM, &access)?;
         // Rotation: the old refresh token is revoked server side, so keep the new one.
         if let Some(new_refresh) = new_refresh {
-            keychain_set(REFRESH_ITEM, &new_refresh)?;
+            secret_set(REFRESH_ITEM, &new_refresh)?;
         }
         self.token = Some(access);
         Ok(())
@@ -237,4 +330,26 @@ fn check(status: u16, answer: Value) -> Result<Value, String> {
         _ => {}
     }
     Err(message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_store_round_trips_and_is_owner_only() {
+        let dir = std::env::temp_dir().join(format!("els-test-{}", std::process::id()));
+        file_set(&dir, "ecc-pat", "ecc_pat_abc").unwrap();
+        file_set(&dir, "ecc-pat", "ecc_pat_new").unwrap(); // overwrite, not append
+        assert_eq!(file_get(&dir, "ecc-pat").as_deref(), Some("ecc_pat_new"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode(&dir.join("ecc-pat")), 0o600);
+            assert_eq!(mode(&dir), 0o700);
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(file_get(&dir, "ecc-pat"), None);
+    }
 }
